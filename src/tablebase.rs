@@ -18,6 +18,7 @@ use std::{
     cmp::{max, Reverse},
     fs, io,
     path::{Path, PathBuf},
+    sync::Arc,
 };
 
 use arrayvec::ArrayVec;
@@ -49,8 +50,8 @@ enum ProbeState {
 /// A collection of tables.
 #[derive(Debug)]
 pub struct Tablebase<S: Position + Clone + Syzygy> {
-    wdl: FxHashMap<Material, (PathBuf, OnceCell<WdlTable<S, RandomAccessFile>>)>,
-    dtz: FxHashMap<Material, (PathBuf, OnceCell<DtzTable<S, RandomAccessFile>>)>,
+    wdl: FxHashMap<Material, (PathBuf, Arc<OnceCell<WdlTable<S, RandomAccessFile>>>)>,
+    dtz: FxHashMap<Material, (PathBuf, Arc<OnceCell<DtzTable<S, RandomAccessFile>>>)>,
     max_pieces: usize,
 }
 
@@ -64,8 +65,8 @@ impl<S: Position + Clone + Syzygy> Tablebase<S> {
     /// Create an empty collection of tables.
     pub fn new() -> Tablebase<S> {
         Tablebase {
-            wdl: FxHashMap::with_capacity_and_hasher(145, Default::default()),
-            dtz: FxHashMap::with_capacity_and_hasher(145, Default::default()),
+            wdl: FxHashMap::with_capacity_and_hasher(290, Default::default()),
+            dtz: FxHashMap::with_capacity_and_hasher(290, Default::default()),
             max_pieces: 0,
         }
     }
@@ -147,13 +148,20 @@ impl<S: Position + Clone + Syzygy> Tablebase<S> {
         if ext == S::TBW.ext
             || (!material.has_pawns() && S::PAWNLESS_TBW.map_or(false, |t| ext == t.ext))
         {
+            let cell = Arc::new(OnceCell::new());
+
             self.wdl
-                .insert(material, (path.to_path_buf(), OnceCell::new()));
+                .insert(material.clone(), (path.to_path_buf(), cell.clone()));
+            self.wdl
+                .insert(material.into_flipped(), (path.to_path_buf(), cell));
         } else if ext == S::TBZ.ext
             || (!material.has_pawns() && S::PAWNLESS_TBZ.map_or(false, |t| ext == t.ext))
         {
+            let cell = Arc::new(OnceCell::new());
             self.dtz
-                .insert(material, (path.to_path_buf(), OnceCell::new()));
+                .insert(material.clone(), (path.to_path_buf(), cell.clone()));
+            self.dtz
+                .insert(material.into_flipped(), (path.to_path_buf(), cell));
         } else {
             return Err(io::Error::from(io::ErrorKind::InvalidInput));
         }
@@ -166,7 +174,6 @@ impl<S: Position + Clone + Syzygy> Tablebase<S> {
         if let Some((path, table)) = self
             .wdl
             .get(key)
-            .or_else(|| self.wdl.get(&key.clone().into_flipped()))
         {
             table
                 .get_or_try_init(|| WdlTable::open(path, key))
@@ -183,7 +190,6 @@ impl<S: Position + Clone + Syzygy> Tablebase<S> {
         if let Some((path, table)) = self
             .dtz
             .get(key)
-            .or_else(|| self.dtz.get(&key.clone().into_flipped()))
         {
             table
                 .get_or_try_init(|| DtzTable::open(path, key))
